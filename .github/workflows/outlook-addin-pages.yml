@@ -2,7 +2,7 @@ name: Publish Outlook add-in
 
 on:
   push:
-    branches: [codex/mvp-foundation]
+    branches: [main]
     paths:
       - outlook-addin/**
       - .github/workflows/outlook-addin-pages.yml
