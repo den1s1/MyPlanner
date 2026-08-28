@@ -50,6 +50,7 @@ Office.onReady(() => {
         subject: item.subject || '',
         senderName: item.from?.displayName || '',
         senderEmail: item.from?.emailAddress || '',
+        recipients: Array.isArray(item.to) ? item.to.map(person => person.displayName || person.emailAddress || '').filter(Boolean).join(', ') : '',
         receivedAt: item.dateTimeCreated instanceof Date ? item.dateTimeCreated.toISOString() : '',
         excerpt: text,
       }

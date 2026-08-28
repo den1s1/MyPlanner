@@ -45,10 +45,25 @@ export interface CapturedEmail {
   subject: string
   senderName: string
   senderEmail: string
+  recipients: string
   receivedAt: string
   excerpt: string
   capturedAt: string
   processed: boolean
+}
+
+export type TrackingStatus = 'waiting' | 'reminded' | 'completed' | 'cancelled'
+
+export interface Tracking {
+  id: string
+  projectId: string
+  subject: string
+  recipient: string
+  sentDate: string
+  checkDate: string
+  status: TrackingStatus
+  comment: string
+  sourceEmailId: string
 }
 
 export interface QuickLink {
@@ -109,6 +124,7 @@ export interface PlannerData {
   contractStages: ContractStage[]
   meetings: Meeting[]
   inbox: CapturedEmail[]
+  trackings: Tracking[]
   integrations: {
     worklogExcelPath: string
     youtrackTokenPath: string

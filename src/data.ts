@@ -28,6 +28,7 @@ export const initialData: PlannerData = {
   ],
   meetings: [],
   inbox: [],
+  trackings: [],
   integrations: {
     worklogExcelPath: '',
     youtrackTokenPath: '',

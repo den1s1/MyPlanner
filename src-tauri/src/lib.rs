@@ -21,6 +21,7 @@ struct OutlookCaptureQuery {
     subject: Option<String>,
     sender_name: Option<String>,
     sender_email: Option<String>,
+    recipients: Option<String>,
     received_at: Option<String>,
     excerpt: Option<String>,
 }
@@ -33,6 +34,7 @@ struct CapturedEmail {
     subject: String,
     sender_name: String,
     sender_email: String,
+    recipients: String,
     received_at: String,
     excerpt: String,
     captured_at: String,
@@ -79,6 +81,7 @@ fn start_outlook_bridge(app: tauri::AppHandle, state: OutlookBridgeState) {
                         subject: capture.subject.unwrap_or_default(),
                         sender_name: capture.sender_name.unwrap_or_default(),
                         sender_email: capture.sender_email.unwrap_or_default(),
+                        recipients: capture.recipients.unwrap_or_default(),
                         received_at: capture.received_at.unwrap_or_default(),
                         excerpt: capture.excerpt.unwrap_or_default(),
                         captured_at: Utc::now().to_rfc3339(),

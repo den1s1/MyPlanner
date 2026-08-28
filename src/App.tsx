@@ -3,14 +3,14 @@ import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
-  ArrowUpRight, BriefcaseBusiness, CalendarDays, Check, CheckCircle2,
+  ArrowUpRight, BellRing, BriefcaseBusiness, CalendarDays, Check, CheckCircle2,
   ChevronRight, Circle, Clock3, ExternalLink, FileText, FolderOpen,
   Eye, EyeOff, GripVertical, LayoutDashboard, Link2, ListTodo, Menu, MessageSquareText, MoreHorizontal,
   Inbox, NotebookPen, PanelLeftClose, Pencil, Plus, Settings, StickyNote,
   Trash2, X,
 } from 'lucide-react'
 import { initialData } from './data'
-import type { CapturedEmail, ContractStage, ContractStageStatus, Meeting, MeetingAction, PaymentStatus, PlannerData, Priority, Project, Task, TaskSource, TaskStatus } from './types'
+import type { CapturedEmail, ContractStage, ContractStageStatus, Meeting, MeetingAction, PaymentStatus, PlannerData, Priority, Project, Task, TaskSource, TaskStatus, Tracking, TrackingStatus } from './types'
 
 type View = 'dashboard' | 'inbox' | 'projects' | 'tasks' | 'notes' | 'project'
 
@@ -64,7 +64,7 @@ function loadData(): PlannerData {
       const legacy = stage as ContractStage & { payment?: string; advanceAmount?: number }
       return { ...stage, status: statusMigration[stage.status] || stage.status, suspensionLetter: stage.suspensionLetter || '', cost: Number(stage.cost) || 0, advancePercent: Number(stage.advancePercent ?? legacy.advanceAmount) || 0, advanceStatus: stage.advanceStatus || (legacy.payment === 'Оплачено' ? 'paid' : 'unpaid'), finalPaymentStatus: stage.finalPaymentStatus || 'unpaid' } as ContractStage
     })
-    return { ...initialData, ...parsed, projects, tasks, contractStages, meetings: parsed.meetings || [], inbox: parsed.inbox || [], integrations: { ...initialData.integrations, ...(parsed.integrations || {}) } }
+    return { ...initialData, ...parsed, projects, tasks, contractStages, meetings: parsed.meetings || [], inbox: parsed.inbox || [], trackings: parsed.trackings || [], integrations: { ...initialData.integrations, ...(parsed.integrations || {}) } }
   } catch { return initialData }
 }
 
@@ -203,6 +203,7 @@ function DataSettings({ data, importData, close }: { data: PlannerData; importDa
         contractStages: parsed.contractStages || [],
         meetings: parsed.meetings || [],
         inbox: parsed.inbox || [],
+        trackings: parsed.trackings || [],
         integrations: { ...initialData.integrations, ...(parsed.integrations || {}) },
       }
       importData(normalized)
@@ -219,13 +220,21 @@ function InboxView({ data, setData }: { data: PlannerData; setData: React.Dispat
   const [showSetup, setShowSetup] = useState(false)
   const pending = data.inbox.filter(email => !email.processed)
   const emailText = (email: CapturedEmail) => [email.subject, `От: ${email.senderName || email.senderEmail}${email.senderEmail && email.senderName ? ` <${email.senderEmail}>` : ''}`, email.receivedAt ? `Дата: ${new Date(email.receivedAt).toLocaleString('ru-RU')}` : '', email.excerpt].filter(Boolean).join('\n\n')
-  const finish = (email: CapturedEmail, kind: 'note' | 'task') => {
+  const finish = (email: CapturedEmail, kind: 'note' | 'task' | 'tracking') => {
     const projectId = projectByEmail[email.id] || ''
+    if (kind === 'tracking' && !projectId) {
+      window.alert('Для отслеживания сначала выберите проект.')
+      return
+    }
+    const sentDate = email.receivedAt ? email.receivedAt.slice(0, 10) : new Date().toISOString().slice(0, 10)
+    const checkDateValue = new Date(`${sentDate}T00:00:00`)
+    checkDateValue.setDate(checkDateValue.getDate() + 7)
     setData(current => ({
       ...current,
       inbox: current.inbox.map(item => item.id === email.id ? { ...item, processed: true } : item),
       notes: kind === 'note' ? [{ id: uid('n'), text: emailText(email), projectId: projectId || undefined, createdAt: new Date().toISOString() }, ...current.notes] : current.notes,
       tasks: kind === 'task' ? [{ id: uid('t'), title: email.subject || 'Письмо Outlook', projectId, due: new Date().toISOString().slice(0, 10), priority: 'medium', done: false, description: emailText(email), status: 'planned', assignee: '', source: 'outlook', contractStageId: '', meetingId: '' }, ...current.tasks] : current.tasks,
+      trackings: kind === 'tracking' ? [{ id: uid('tr'), projectId, subject: email.subject || 'Запрос из Outlook', recipient: email.recipients || '', sentDate, checkDate: checkDateValue.toISOString().slice(0, 10), status: 'waiting', comment: emailText(email), sourceEmailId: email.outlookItemId }, ...current.trackings] : current.trackings,
     }))
   }
   const remove = (id: string) => setData(current => ({ ...current, inbox: current.inbox.filter(email => email.id !== id) }))
@@ -238,7 +247,7 @@ function InboxView({ data, setData }: { data: PlannerData; setData: React.Dispat
     {pending.length === 0 ? <div className="empty-inbox"><Inbox /><h2>Новых писем нет</h2><p>Откройте письмо в Outlook и нажмите «В MyPlanner».</p></div> : <div className="inbox-list">{pending.map(email => <article className="inbox-card" key={email.id}>
       <div className="inbox-card-head"><div><span>{email.senderName || email.senderEmail || 'Отправитель не указан'}</span><h2>{email.subject || 'Без темы'}</h2></div><time>{email.receivedAt ? new Date(email.receivedAt).toLocaleString('ru-RU') : ''}</time></div>
       {email.excerpt && <p>{email.excerpt}</p>}
-      <div className="inbox-actions"><select value={projectByEmail[email.id] || ''} onChange={event => setProjectByEmail(current => ({ ...current, [email.id]: event.target.value }))}><option value="">Без проекта</option>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="quiet-button" onClick={() => finish(email, 'note')}><NotebookPen /> В заметку</button><button className="primary-button" onClick={() => finish(email, 'task')}><ListTodo /> В задачу</button><button className="icon-button" title="Удалить" onClick={() => remove(email.id)}><Trash2 /></button></div>
+      <div className="inbox-actions"><select value={projectByEmail[email.id] || ''} onChange={event => setProjectByEmail(current => ({ ...current, [email.id]: event.target.value }))}><option value="">Без проекта</option>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="quiet-button" onClick={() => finish(email, 'note')}><NotebookPen /> В заметку</button><button className="quiet-button" onClick={() => finish(email, 'tracking')}><BellRing /> Отслеживать</button><button className="primary-button" onClick={() => finish(email, 'task')}><ListTodo /> В задачу</button><button className="icon-button" title="Удалить" onClick={() => remove(email.id)}><Trash2 /></button></div>
     </article>)}</div>}
     {showSetup && <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && setShowSetup(false)}><div className="modal outlook-setup"><div className="modal-head"><div><span>Интеграция</span><h2>Outlook Web Add-in</h2></div><button onClick={() => setShowSetup(false)}><X /></button></div><p className="settings-intro">Введите этот код один раз в надстройке Outlook. MyPlanner должен быть запущен во время передачи письма.</p><label>Код сопряжения<div className="pairing-row"><input readOnly value={data.integrations.outlookBridgeKey} /><button className="quiet-button" onClick={copyKey}>Копировать</button></div></label><small>Локальный приёмник: http://127.0.0.1:17832</small><div className="modal-actions"><button className="quiet-button" onClick={() => setShowSetup(false)}>Закрыть</button></div></div></div>}
   </>
@@ -381,7 +390,7 @@ function ProjectEditor({ project, save, close }: { project: Project; save: (proj
   </div>
 }
 
-type ProjectSection = 'links' | 'contract' | 'correspondence' | 'tasks' | 'meetings'
+type ProjectSection = 'links' | 'contract' | 'correspondence' | 'tasks' | 'trackings' | 'meetings'
 
 function ProjectWorkspace({ project, data, setData }: { project?: Project; data: PlannerData; setData: React.Dispatch<React.SetStateAction<PlannerData>> }) {
   const [section, setSection] = useState<ProjectSection>('tasks')
@@ -393,8 +402,10 @@ function ProjectWorkspace({ project, data, setData }: { project?: Project; data:
   const [editingStage, setEditingStage] = useState<ContractStage | null>(null)
   if (!project) return <div className="empty-project"><FolderOpen /><h2>Проект не найден</h2><p>Выберите проект в боковом меню.</p></div>
   const projectLinks = data.links.filter(link => link.projectId === project.id)
+  const activeTrackings = data.trackings.filter(tracking => tracking.projectId === project.id && tracking.status !== 'completed' && tracking.status !== 'cancelled')
   const sections: { id: ProjectSection; label: string; icon: typeof Link2 }[] = [
     { id: 'tasks', label: 'Задачи', icon: ListTodo },
+    { id: 'trackings', label: 'Отслеживания', icon: BellRing },
     { id: 'links', label: 'Ссылки', icon: Link2 },
     { id: 'meetings', label: 'Совещания', icon: CalendarDays },
     { id: 'correspondence', label: 'Переписка', icon: MessageSquareText },
@@ -402,7 +413,7 @@ function ProjectWorkspace({ project, data, setData }: { project?: Project; data:
   ]
   return <div className="project-workspace">
     <div className="workspace-tabs" role="tablist">
-      {sections.map(item => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => setSection(item.id)}><item.icon />{item.label}{item.id === 'links' && projectLinks.length > 0 && <b>{projectLinks.length}</b>}{item.id === 'tasks' && data.tasks.filter(task => task.projectId === project.id && !task.done).length > 0 && <b>{data.tasks.filter(task => task.projectId === project.id && !task.done).length}</b>}</button>)}
+      {sections.map(item => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => setSection(item.id)}><item.icon />{item.label}{item.id === 'links' && projectLinks.length > 0 && <b>{projectLinks.length}</b>}{item.id === 'tasks' && data.tasks.filter(task => task.projectId === project.id && !task.done).length > 0 && <b>{data.tasks.filter(task => task.projectId === project.id && !task.done).length}</b>}{item.id === 'trackings' && activeTrackings.length > 0 && <b>{activeTrackings.length}</b>}</button>)}
     </div>
     <div className="workspace-body">
       {section === 'links' && <div className="workspace-section">
@@ -416,6 +427,7 @@ function ProjectWorkspace({ project, data, setData }: { project?: Project; data:
       })()}
       {section === 'correspondence' && <CorrespondenceSection project={project} setData={setData} />}
       {section === 'tasks' && <ProjectTasks project={project} data={data} setData={setData} />}
+      {section === 'trackings' && <ProjectTrackings project={project} data={data} setData={setData} />}
       {section === 'meetings' && <ProjectMeetings project={project} data={data} setData={setData} />}
     </div>
     {addingLink && <LinkEditor projectId={project.id} close={() => setAddingLink(false)} save={link => { setData(current => ({ ...current, links: [...current.links, link] })); setAddingLink(false) }} />}
@@ -599,6 +611,61 @@ function TaskEditor({ project, stages, task, save, close }: { project: Project; 
   const update = <K extends keyof Task>(key: K, value: Task[K]) => setForm(current => ({ ...current, [key]: value }))
   const submit = (event: React.FormEvent) => { event.preventDefault(); if (!form.title.trim()) return; const done = form.status === 'done'; save({ ...form, title: form.title.trim(), description: form.description.trim(), assignee: form.assignee.trim(), done }) }
   return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><form className="modal task-editor" onSubmit={submit}><div className="modal-head"><div><span>Задача проекта</span><h2>{task ? 'Редактирование задачи' : 'Новая задача'}</h2></div><button type="button" onClick={close}><X /></button></div><div className="task-form"><label className="span-2">Название<input autoFocus value={form.title} onChange={event => update('title', event.target.value)} required /></label><label className="span-2">Описание<textarea value={form.description} onChange={event => update('description', event.target.value)} /></label><label>Срок<input type="date" value={form.due} onChange={event => update('due', event.target.value)} /></label><label>Ответственный<input value={form.assignee} onChange={event => update('assignee', event.target.value)} /></label><label>Статус<select value={form.status} onChange={event => update('status', event.target.value as TaskStatus)}><option value="planned">Запланирована</option><option value="in_progress">В работе</option><option value="blocked">Заблокирована</option><option value="done">Завершена</option></select></label><label>Приоритет<select value={form.priority} onChange={event => update('priority', event.target.value as Priority)}><option value="high">Высокий</option><option value="medium">Обычный</option><option value="low">Низкий</option></select></label><label>Источник<select value={form.source} onChange={event => update('source', event.target.value as TaskSource)}><option value="manual">Вручную</option><option value="meeting">Совещание</option><option value="outlook">Outlook</option><option value="youtrack">YouTrack</option></select></label><label>Этап договора<select value={form.contractStageId} onChange={event => update('contractStageId', event.target.value)}><option value="">Не связан</option>{stages.filter(stage => stage.projectId === project.id).map(stage => <option key={stage.id} value={stage.id}>{stage.number} · {stage.name}</option>)}</select></label></div><div className="modal-actions"><button type="button" className="quiet-button" onClick={close}>Отмена</button><button type="submit" className="primary-button">Сохранить</button></div></form></div>
+}
+
+const trackingStatusLabel: Record<TrackingStatus, string> = {
+  waiting: 'Ожидаю',
+  reminded: 'Напомнил',
+  completed: 'Получено',
+  cancelled: 'Отменено',
+}
+
+function ProjectTrackings({ project, data, setData }: { project: Project; data: PlannerData; setData: React.Dispatch<React.SetStateAction<PlannerData>> }) {
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Tracking | null>(null)
+  const [showClosed, setShowClosed] = useState(false)
+  const today = new Date().toISOString().slice(0, 10)
+  const projectTrackings = data.trackings.filter(tracking => tracking.projectId === project.id)
+  const isClosed = (tracking: Tracking) => tracking.status === 'completed' || tracking.status === 'cancelled'
+  const closedCount = projectTrackings.filter(isClosed).length
+  const visible = projectTrackings
+    .filter(tracking => showClosed || !isClosed(tracking))
+    .sort((a, b) => Number(isClosed(a)) - Number(isClosed(b)) || (a.checkDate || '9999').localeCompare(b.checkDate || '9999'))
+  const remove = (tracking: Tracking) => {
+    if (window.confirm(`Удалить отслеживание «${tracking.subject}»?`)) {
+      setData(current => ({ ...current, trackings: current.trackings.filter(item => item.id !== tracking.id) }))
+    }
+  }
+  const complete = (id: string) => setData(current => ({ ...current, trackings: current.trackings.map(item => item.id === id ? { ...item, status: 'completed' } : item) }))
+  return <div className="workspace-section trackings-section">
+    <div className="section-heading"><div><h2>Отслеживания</h2><p>Запросы и поручения другим людям, по которым вы ждёте результат.</p></div><div className="section-actions">{closedCount > 0 && <button className="quiet-button completed-toggle" onClick={() => setShowClosed(value => !value)}>{showClosed ? <EyeOff /> : <Eye />}{showClosed ? 'Скрыть закрытые' : `Показать закрытые (${closedCount})`}</button>}<button className="primary-button" onClick={() => setAdding(true)}><Plus /> Добавить отслеживание</button></div></div>
+    {visible.length ? <div className="tracking-list">{visible.map(tracking => {
+      const overdue = !isClosed(tracking) && Boolean(tracking.checkDate) && tracking.checkDate < today
+      return <article key={tracking.id} className={`${overdue ? 'overdue' : ''} ${isClosed(tracking) ? 'closed' : ''}`}>
+        <div className="tracking-copy"><div className="tracking-head"><strong>{tracking.subject}</strong><span className={`tracking-status ${tracking.status}`}>{trackingStatusLabel[tracking.status]}</span></div>
+          <div className="tracking-meta"><span>Кому: <b>{tracking.recipient || 'не указано'}</b></span><span>Отправлено: <b>{formatContractDate(tracking.sentDate)}</b></span><span className={overdue ? 'overdue' : ''}>{overdue ? 'Просрочена проверка: ' : 'Проверить: '}<b>{formatContractDate(tracking.checkDate)}</b></span>{tracking.sourceEmailId && <span>Outlook</span>}</div>
+          {tracking.comment && <p>{tracking.comment}</p>}
+        </div>
+        <div className="tracking-controls">{!isClosed(tracking) && <button className="tracking-complete" onClick={() => complete(tracking.id)}><Check /> Получено</button>}<div className="table-actions visible"><button title="Редактировать" onClick={() => setEditing(tracking)}><Pencil /></button><button className="danger" title="Удалить" onClick={() => remove(tracking)}><Trash2 /></button></div></div>
+      </article>
+    })}</div> : <SectionPlaceholder icon={BellRing} title={projectTrackings.length ? 'Все отслеживания закрыты' : 'Отслеживаний пока нет'} text={projectTrackings.length ? 'Включите отображение закрытых записей или создайте новую.' : 'Добавьте запрос, по которому нужно получить результат или напомнить адресату.'} />}
+    {adding && <TrackingEditor projectId={project.id} close={() => setAdding(false)} save={tracking => { setData(current => ({ ...current, trackings: [tracking, ...current.trackings] })); setAdding(false) }} />}
+    {editing && <TrackingEditor projectId={project.id} tracking={editing} close={() => setEditing(null)} save={tracking => { setData(current => ({ ...current, trackings: current.trackings.map(item => item.id === tracking.id ? tracking : item) })); setEditing(null) }} />}
+  </div>
+}
+
+function TrackingEditor({ projectId, tracking, save, close }: { projectId: string; tracking?: Tracking; save: (tracking: Tracking) => void; close: () => void }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const defaultCheck = new Date()
+  defaultCheck.setDate(defaultCheck.getDate() + 7)
+  const [form, setForm] = useState<Tracking>(tracking || { id: uid('tr'), projectId, subject: '', recipient: '', sentDate: today, checkDate: defaultCheck.toISOString().slice(0, 10), status: 'waiting', comment: '', sourceEmailId: '' })
+  const update = <K extends keyof Tracking>(key: K, value: Tracking[K]) => setForm(current => ({ ...current, [key]: value }))
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!form.subject.trim()) return
+    save({ ...form, subject: form.subject.trim(), recipient: form.recipient.trim(), comment: form.comment.trim() })
+  }
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><form className="modal tracking-editor" onSubmit={submit}><div className="modal-head"><div><span>Запрос другому человеку</span><h2>{tracking ? 'Редактирование отслеживания' : 'Новое отслеживание'}</h2></div><button type="button" onClick={close}><X /></button></div><div className="tracking-form"><label className="span-2">Что ожидаем<input autoFocus value={form.subject} onChange={event => update('subject', event.target.value)} required /></label><label className="span-2">Адресат<input value={form.recipient} onChange={event => update('recipient', event.target.value)} placeholder="Имя, компания или адрес электронной почты" /></label><label>Дата отправки<input type="date" value={form.sentDate} onChange={event => update('sentDate', event.target.value)} /></label><label>Дата следующей проверки<input type="date" value={form.checkDate} onChange={event => update('checkDate', event.target.value)} /></label><label>Статус<select value={form.status} onChange={event => update('status', event.target.value as TrackingStatus)}><option value="waiting">Ожидаю</option><option value="reminded">Напомнил</option><option value="completed">Получено</option><option value="cancelled">Отменено</option></select></label><label className="span-2">Комментарий<textarea value={form.comment} onChange={event => update('comment', event.target.value)} placeholder="Что было запрошено и что нужно проверить" /></label></div><div className="modal-actions"><button type="button" className="quiet-button" onClick={close}>Отмена</button><button type="submit" className="primary-button">Сохранить</button></div></form></div>
 }
 
 function ProjectMeetings({ project, data, setData }: { project: Project; data: PlannerData; setData: React.Dispatch<React.SetStateAction<PlannerData>> }) {
