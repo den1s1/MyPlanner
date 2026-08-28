@@ -52,14 +52,24 @@ fn start_outlook_bridge(app: tauri::AppHandle, state: OutlookBridgeState) {
             Ok(server) => server,
             Err(error) => { eprintln!("failed to start Outlook bridge: {error}"); return; }
         };
-        for request in server.incoming_requests() {
-            let url = request.url();
-            let (path, query) = url.split_once('?').unwrap_or((url, ""));
+        for mut request in server.incoming_requests() {
+            let url = request.url().to_string();
+            let (path, query) = url.split_once('?').unwrap_or((&url, ""));
             if path != "/capture" {
                 let _ = request.respond(tiny_http::Response::from_string("Not found").with_status_code(404));
                 continue;
             }
-            let parsed = serde_urlencoded::from_str::<OutlookCaptureQuery>(query);
+            let mut body = String::new();
+            let encoded = if request.method() == &tiny_http::Method::Post {
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let _ = request.respond(tiny_http::Response::from_string("Не удалось прочитать данные письма.").with_status_code(400));
+                    continue;
+                }
+                body.as_str()
+            } else {
+                query
+            };
+            let parsed = serde_urlencoded::from_str::<OutlookCaptureQuery>(encoded);
             let expected = state.0.read().map(|value| value.clone()).unwrap_or_default();
             let response = match parsed {
                 Ok(capture) if !expected.is_empty() && capture.key == expected => {
@@ -81,7 +91,8 @@ fn start_outlook_bridge(app: tauri::AppHandle, state: OutlookBridgeState) {
                 Ok(_) => tiny_http::Response::from_string("Неверный код сопряжения. Откройте настройки Outlook в MyPlanner.").with_status_code(403),
                 Err(_) => tiny_http::Response::from_string("Некорректные данные письма.").with_status_code(400),
             };
-            let _ = request.respond(response);
+            let content_type = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).expect("valid content type header");
+            let _ = request.respond(response.with_header(content_type));
         }
     });
 }

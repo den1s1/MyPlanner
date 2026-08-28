@@ -4,6 +4,25 @@ const button = document.querySelector('#capture')
 const status = document.querySelector('#status')
 const subjectElement = document.querySelector('#subject')
 
+function postToPlanner(target, values) {
+  const targetName = `myplanner-${Date.now()}`
+  target.name = targetName
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = bridgeUrl
+  form.target = targetName
+  for (const [name, value] of Object.entries(values)) {
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = name
+    input.value = value
+    form.appendChild(input)
+  }
+  document.body.appendChild(form)
+  form.submit()
+  form.remove()
+}
+
 function bodyText(item) {
   return new Promise(resolve => item.body.getAsync(Office.CoercionType.Text, result => resolve(result.status === Office.AsyncResultStatus.Succeeded ? result.value : '')))
 }
@@ -25,7 +44,7 @@ Office.onReady(() => {
     const target = window.open('about:blank', '_blank')
     try {
       const text = (await bodyText(item)).replace(/\s+/g, ' ').trim().slice(0, 1200)
-      const params = new URLSearchParams({
+      const values = {
         key,
         itemId: item.itemId || '',
         subject: item.subject || '',
@@ -33,9 +52,9 @@ Office.onReady(() => {
         senderEmail: item.from?.emailAddress || '',
         receivedAt: item.dateTimeCreated instanceof Date ? item.dateTimeCreated.toISOString() : '',
         excerpt: text,
-      })
+      }
       if (!target) throw new Error('Outlook заблокировал открытие локального окна.')
-      target.location.href = `${bridgeUrl}?${params}`
+      postToPlanner(target, values)
       status.textContent = 'Письмо передано. Проверьте «Входящие» в MyPlanner.'
     } catch (error) {
       target?.close()
