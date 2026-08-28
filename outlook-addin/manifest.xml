@@ -10,7 +10,7 @@
   <DefaultLocale>ru-RU</DefaultLocale>
   <DisplayName DefaultValue="MyPlanner" />
   <Description DefaultValue="Создание заметок и задач MyPlanner из писем Outlook." />
-  <IconUrl DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-64.png" />
+  <IconUrl DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-32.png" />
   <HighResolutionIconUrl DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-128.png" />
   <SupportUrl DefaultValue="https://github.com/den1s1/MyPlanner" />
   <AppDomains>
