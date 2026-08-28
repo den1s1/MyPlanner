@@ -1,0 +1,28 @@
+[package]
+name = "myplanner"
+version = "0.1.0"
+description = "MyPlanner desktop application"
+authors = ["den1s1"]
+edition = "2021"
+
+[lib]
+name = "myplanner_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-global-shortcut = "2.3.2"
+rfd = "0.15"
+trash = "5"
+calamine = { version = "0.26", features = ["dates"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+urlencoding = "2"
+tiny_http = "0.12"
+serde_urlencoded = "0.7"
