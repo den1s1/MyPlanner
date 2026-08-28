@@ -10,8 +10,8 @@
   <DefaultLocale>ru-RU</DefaultLocale>
   <DisplayName DefaultValue="MyPlanner" />
   <Description DefaultValue="Создание заметок и задач MyPlanner из писем Outlook." />
-  <IconUrl DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-32.png" />
-  <HighResolutionIconUrl DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-128.png" />
+  <IconUrl DefaultValue="https://den1s1.github.io/MyPlanner/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="https://den1s1.github.io/MyPlanner/icon-128.png" />
   <SupportUrl DefaultValue="https://github.com/den1s1/MyPlanner" />
   <AppDomains>
     <AppDomain>https://den1s1.github.io</AppDomain>
@@ -19,7 +19,7 @@
   <Hosts><Host Name="Mailbox" /></Hosts>
   <Requirements><Sets><Set Name="Mailbox" MinVersion="1.3" /></Sets></Requirements>
   <FormSettings>
-    <Form xsi:type="ItemRead"><DesktopSettings><SourceLocation DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/taskpane.html" /><RequestedHeight>250</RequestedHeight></DesktopSettings></Form>
+    <Form xsi:type="ItemRead"><DesktopSettings><SourceLocation DefaultValue="https://den1s1.github.io/MyPlanner/taskpane.html" /><RequestedHeight>250</RequestedHeight></DesktopSettings></Form>
   </FormSettings>
   <Permissions>ReadItem</Permissions>
   <Rule xsi:type="RuleCollection" Mode="Or"><Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" /></Rule>
@@ -33,8 +33,8 @@
       </Group></OfficeTab></ExtensionPoint>
     </DesktopFormFactor></Host></Hosts>
     <Resources>
-      <bt:Images><bt:Image id="Icon.16" DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-32.png" /><bt:Image id="Icon.32" DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-32.png" /><bt:Image id="Icon.80" DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/icon-128.png" /></bt:Images>
-      <bt:Urls><bt:Url id="Taskpane.Url" DefaultValue="https://den1s1.github.io/MyPlanner/outlook-addin/taskpane.html" /></bt:Urls>
+      <bt:Images><bt:Image id="Icon.16" DefaultValue="https://den1s1.github.io/MyPlanner/icon-32.png" /><bt:Image id="Icon.32" DefaultValue="https://den1s1.github.io/MyPlanner/icon-32.png" /><bt:Image id="Icon.80" DefaultValue="https://den1s1.github.io/MyPlanner/icon-128.png" /></bt:Images>
+      <bt:Urls><bt:Url id="Taskpane.Url" DefaultValue="https://den1s1.github.io/MyPlanner/taskpane.html" /></bt:Urls>
       <bt:ShortStrings><bt:String id="Group.Label" DefaultValue="MyPlanner" /><bt:String id="Capture.Label" DefaultValue="В MyPlanner" /></bt:ShortStrings>
       <bt:LongStrings><bt:String id="Capture.Description" DefaultValue="Создать заметку или задачу из открытого письма" /></bt:LongStrings>
     </Resources>
