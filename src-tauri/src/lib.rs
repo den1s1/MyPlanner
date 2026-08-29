@@ -7,11 +7,13 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use calamine::{open_workbook_auto, Data, DataType, Reader};
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use regex::Regex;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Default)]
-struct OutlookBridgeState(Arc<RwLock<String>>);
+struct OutlookBridgeState(Arc<RwLock<Vec<String>>>);
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +26,23 @@ struct OutlookCaptureQuery {
     recipients: Option<String>,
     received_at: Option<String>,
     excerpt: Option<String>,
+    attachments: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OutlookAttachmentPayload {
+    name: String,
+    content: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CapturedAttachment {
+    id: String,
+    name: String,
+    path: String,
+    size: usize,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -37,14 +56,65 @@ struct CapturedEmail {
     recipients: String,
     received_at: String,
     excerpt: String,
+    attachments: Vec<CapturedAttachment>,
     captured_at: String,
     processed: bool,
 }
 
+fn safe_file_name(value: &str) -> String {
+    let name = Path::new(value).file_name().and_then(|name| name.to_str()).unwrap_or("Вложение");
+    let cleaned = name.chars().map(|character| match character {
+        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+        _ => character,
+    }).collect::<String>();
+    let cleaned = cleaned.trim().trim_end_matches(&['.', ' '][..]).to_string();
+    if cleaned.is_empty() { "Вложение".to_string() } else { cleaned }
+}
+
+fn available_destination(directory: &Path, file_name: &str) -> PathBuf {
+    let initial = directory.join(file_name);
+    if !initial.exists() { return initial; }
+    let path = Path::new(file_name);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("Вложение");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 2..1000 {
+        let candidate = match extension {
+            Some(extension) => directory.join(format!("{stem} ({index}).{extension}")),
+            None => directory.join(format!("{stem} ({index})")),
+        };
+        if !candidate.exists() { return candidate; }
+    }
+    directory.join(format!("{}-{}", Utc::now().timestamp_millis(), file_name))
+}
+
+fn store_outlook_attachments(app: &tauri::AppHandle, capture_id: &str, encoded: Option<&str>) -> Result<Vec<CapturedAttachment>, String> {
+    let payloads = match encoded.filter(|value| !value.trim().is_empty()) {
+        Some(value) => serde_json::from_str::<Vec<OutlookAttachmentPayload>>(value).map_err(|_| "Не удалось прочитать список вложений Outlook".to_string())?,
+        None => return Ok(Vec::new()),
+    };
+    if payloads.is_empty() { return Ok(Vec::new()); }
+    let directory = app.path().app_data_dir().map_err(|error| format!("Не удалось определить папку данных: {error}"))?.join("outlook-attachments").join(capture_id);
+    std::fs::create_dir_all(&directory).map_err(|error| format!("Не удалось создать папку вложений: {error}"))?;
+    let mut stored = Vec::new();
+    for (index, payload) in payloads.into_iter().enumerate() {
+        let bytes = BASE64.decode(payload.content.trim()).map_err(|_| format!("Вложение «{}» передано в неверном формате", payload.name))?;
+        if bytes.len() > 50 * 1024 * 1024 { return Err(format!("Вложение «{}» превышает 50 МБ", payload.name)); }
+        let name = safe_file_name(&payload.name);
+        let path = available_destination(&directory, &name);
+        std::fs::write(&path, &bytes).map_err(|error| format!("Не удалось сохранить вложение «{name}»: {error}"))?;
+        stored.push(CapturedAttachment { id: format!("attachment-{index}"), name: path.file_name().unwrap_or_default().to_string_lossy().into_owned(), path: path.to_string_lossy().into_owned(), size: bytes.len() });
+    }
+    Ok(stored)
+}
+
 #[tauri::command]
 fn set_outlook_bridge_key(key: String, state: tauri::State<'_, OutlookBridgeState>) -> Result<(), String> {
-    if key.trim().len() < 16 { return Err("Код сопряжения слишком короткий".to_string()); }
-    *state.0.write().map_err(|_| "Не удалось обновить код сопряжения")? = key;
+    let key = key.trim().to_string();
+    if key.len() < 16 { return Err("Код сопряжения слишком короткий".to_string()); }
+    let mut keys = state.0.write().map_err(|_| "Не удалось обновить код сопряжения")?;
+    keys.retain(|stored| stored != &key);
+    keys.push(key);
+    while keys.len() > 4 { keys.remove(0); }
     Ok(())
 }
 
@@ -72,11 +142,18 @@ fn start_outlook_bridge(app: tauri::AppHandle, state: OutlookBridgeState) {
                 query
             };
             let parsed = serde_urlencoded::from_str::<OutlookCaptureQuery>(encoded);
-            let expected = state.0.read().map(|value| value.clone()).unwrap_or_default();
+            let authorized = parsed.as_ref().ok()
+                .and_then(|capture| state.0.read().ok().map(|keys| keys.iter().any(|key| key == capture.key.trim())))
+                .unwrap_or(false);
             let response = match parsed {
-                Ok(capture) if !expected.is_empty() && capture.key == expected => {
+                Ok(capture) if authorized => {
+                    let id = format!("outlook-{}", Utc::now().timestamp_millis());
+                    let attachments = store_outlook_attachments(&app, &id, capture.attachments.as_deref());
+                    match attachments {
+                    Ok(attachments) => {
+                    let attachment_count = attachments.len();
                     let email = CapturedEmail {
-                        id: format!("outlook-{}", Utc::now().timestamp_millis()),
+                        id,
                         outlook_item_id: capture.item_id.unwrap_or_default(),
                         subject: capture.subject.unwrap_or_default(),
                         sender_name: capture.sender_name.unwrap_or_default(),
@@ -84,12 +161,16 @@ fn start_outlook_bridge(app: tauri::AppHandle, state: OutlookBridgeState) {
                         recipients: capture.recipients.unwrap_or_default(),
                         received_at: capture.received_at.unwrap_or_default(),
                         excerpt: capture.excerpt.unwrap_or_default(),
+                        attachments,
                         captured_at: Utc::now().to_rfc3339(),
                         processed: false,
                     };
                     let _ = app.emit("outlook-email-captured", email);
                     show_window(&app, "main");
-                    tiny_http::Response::from_string("<html><meta charset=\"utf-8\"><body style=\"font:16px Segoe UI;padding:32px\"><h2>Письмо добавлено в MyPlanner</h2><p>Это окно можно закрыть.</p><script>setTimeout(()=>window.close(),1500)</script></body></html>").with_status_code(200)
+                    tiny_http::Response::from_string(format!("<html><meta charset=\"utf-8\"><body style=\"font:16px Segoe UI;padding:32px\"><h2>Письмо добавлено в MyPlanner</h2><p>Получено вложений: {attachment_count}. Это окно можно закрыть.</p><script>setTimeout(()=>window.close(),1800)</script></body></html>")).with_status_code(200)
+                    }
+                    Err(message) => tiny_http::Response::from_string(message).with_status_code(400),
+                    }
                 }
                 Ok(_) => tiny_http::Response::from_string("Неверный код сопряжения. Откройте настройки Outlook в MyPlanner.").with_status_code(403),
                 Err(_) => tiny_http::Response::from_string("Некорректные данные письма.").with_status_code(400),
@@ -439,17 +520,7 @@ fn create_correspondence_draft(
     })
 }
 
-#[tauri::command]
-fn attach_outgoing_letter(folder_path: String, file_path: String) -> Result<CorrespondenceFolder, String> {
-    let folder = std::path::Path::new(folder_path.trim());
-    let source = std::path::Path::new(file_path.trim());
-    if !folder.is_dir() {
-        return Err("Папка письма не найдена".to_string());
-    }
-    if !source.is_file() {
-        return Err("Перетащите на письмо один файл".to_string());
-    }
-
+fn parse_outgoing_attachment(source: &Path) -> Result<(String, String), String> {
     let file_stem = source.file_stem().and_then(|value| value.to_str()).ok_or("Не удалось прочитать имя файла")?;
     let details = file_stem.strip_prefix("Исх. № ").ok_or("Ожидается имя вида «Исх. № СО-2026-442 от 28.08.2026.pdf»")?;
     let (number, date) = details.split_once(" от ").ok_or("В имени файла не найдены номер и дата после слова «от»")?;
@@ -460,6 +531,20 @@ fn attach_outgoing_letter(folder_path: String, file_path: String) -> Result<Corr
     if !number.starts_with("СО-") {
         return Err("Номер исходящего письма должен начинаться с «СО-»".to_string());
     }
+    Ok((number.to_string(), format!("{}.{}.{}", date_parts[2], date_parts[1], date_parts[0])))
+}
+
+#[tauri::command]
+fn attach_outgoing_letter(folder_path: String, file_path: String) -> Result<CorrespondenceFolder, String> {
+    let folder = std::path::Path::new(folder_path.trim());
+    let source = std::path::Path::new(file_path.trim());
+    if !folder.is_dir() {
+        return Err("Папка письма не найдена".to_string());
+    }
+    if !source.is_file() {
+        return Err("Перетащите на письмо один файл".to_string());
+    }
+    let (number, normalized_date) = parse_outgoing_attachment(source)?;
 
     let folder_name = folder.file_name().and_then(|value| value.to_str()).ok_or("Не удалось прочитать имя папки")?;
     let first_close = folder_name.find(']').ok_or("В имени папки не найден блок даты")?;
@@ -473,7 +558,6 @@ fn attach_outgoing_letter(folder_path: String, file_path: String) -> Result<Corr
         return Err("Файл можно добавить только к исходящему письму «ЛАБС - …»".to_string());
     }
 
-    let normalized_date = format!("{}.{}.{}", date_parts[2], date_parts[1], date_parts[0]);
     let new_name = format!("[{normalized_date}] [{number}]{}", suffix);
     let parent = folder.parent().ok_or("Не удалось определить родительскую папку")?;
     let renamed_folder = parent.join(&new_name);
@@ -497,6 +581,81 @@ fn attach_outgoing_letter(folder_path: String, file_path: String) -> Result<Corr
         name: new_name,
         path: renamed_folder.to_string_lossy().into_owned(),
     })
+}
+
+fn validated_outlook_sources(app: &tauri::AppHandle, attachment_paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    if attachment_paths.is_empty() { return Err("Выберите хотя бы одно вложение".to_string()); }
+    let root = app.path().app_data_dir().map_err(|error| format!("Не удалось определить папку данных: {error}"))?.join("outlook-attachments");
+    let root = root.canonicalize().map_err(|_| "Локальное хранилище вложений не найдено".to_string())?;
+    attachment_paths.iter().map(|value| {
+        let source = Path::new(value.trim()).canonicalize().map_err(|_| "Одно из вложений больше не найдено".to_string())?;
+        if !source.is_file() || !source.starts_with(&root) { return Err("Недопустимый путь к вложению".to_string()); }
+        Ok(source)
+    }).collect()
+}
+
+fn copy_attachment_sources(sources: &[PathBuf], destination: &Path) -> Result<(), String> {
+    for source in sources {
+        let file_name = source.file_name().and_then(|value| value.to_str()).ok_or("Не удалось прочитать имя вложения")?;
+        let target = available_destination(destination, file_name);
+        std::fs::copy(source, &target).map_err(|error| format!("Не удалось скопировать «{file_name}»: {error}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn file_outlook_outgoing(
+    app: tauri::AppHandle,
+    folder_path: String,
+    attachment_paths: Vec<String>,
+) -> Result<CorrespondenceFolder, String> {
+    let folder = Path::new(folder_path.trim());
+    if !folder.is_dir() { return Err("Выбранная папка письма не найдена".to_string()); }
+    let folder_name = folder.file_name().and_then(|value| value.to_str()).ok_or("Не удалось прочитать имя папки")?;
+    let outgoing_name = Regex::new(r"^\[[^\]]+\]\s+\[[^\]]+\]\s+ЛАБС\s+-").expect("valid outgoing folder regex");
+    if !outgoing_name.is_match(folder_name) { return Err("Выберите папку исходящего письма".to_string()); }
+    let sources = validated_outlook_sources(&app, &attachment_paths)?;
+    let draft_name = Regex::new(r"(?i)^\[\d{4}\.\d{2}\.xx\]\s+\[[^\]]*xxx[^\]]*\]").expect("valid draft folder regex");
+    let draft = draft_name.is_match(folder_name);
+    if draft {
+        let letter = sources.iter().find(|source| parse_outgoing_attachment(source).is_ok()).cloned()
+            .ok_or("Для заготовки нужно выбрать файл вида «Исх. № СО-2026-442 от 28.08.2026.pdf»")?;
+        let updated = attach_outgoing_letter(folder_path, letter.to_string_lossy().into_owned())?;
+        let remaining = sources.into_iter().filter(|source| source != &letter).collect::<Vec<_>>();
+        copy_attachment_sources(&remaining, Path::new(&updated.path))?;
+        return Ok(updated);
+    }
+    copy_attachment_sources(&sources, folder)?;
+    Ok(CorrespondenceFolder { name: folder_name.to_string(), path: folder.to_string_lossy().into_owned() })
+}
+
+#[tauri::command]
+fn file_outlook_incoming(
+    app: tauri::AppHandle,
+    root: String,
+    date: String,
+    number: String,
+    correspondent: String,
+    subject: String,
+    attachment_paths: Vec<String>,
+) -> Result<CorrespondenceFolder, String> {
+    let root = Path::new(root.trim());
+    if !root.is_dir() { return Err("Папка переписки проекта не найдена".to_string()); }
+    let parsed_date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| "Укажите дату входящего письма".to_string())?;
+    let number = sanitize_folder_part(&number);
+    let correspondent = sanitize_folder_part(&correspondent);
+    let subject = sanitize_folder_part(&subject);
+    if number.is_empty() || correspondent.is_empty() || subject.is_empty() { return Err("Заполните номер, корреспондента и тему письма".to_string()); }
+    let sources = validated_outlook_sources(&app, &attachment_paths)?;
+    let name = format!("[{}] [{}] {} - ЛАБС. {}", parsed_date.format("%Y.%m.%d"), number, correspondent, subject);
+    let folder = root.join(&name);
+    if folder.exists() { return Err(format!("Папка «{name}» уже существует")); }
+    std::fs::create_dir(&folder).map_err(|error| format!("Не удалось создать папку письма: {error}"))?;
+    if let Err(error) = copy_attachment_sources(&sources, &folder) {
+        let _ = std::fs::remove_dir_all(&folder);
+        return Err(error);
+    }
+    Ok(CorrespondenceFolder { name, path: folder.to_string_lossy().into_owned() })
 }
 
 #[tauri::command]
@@ -595,6 +754,9 @@ fn toggle_sticker(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_window(app, "main");
+        }))
         .manage(OutlookBridgeState::default())
         .invoke_handler(tauri::generate_handler![
             open_local_path,
@@ -603,6 +765,8 @@ pub fn run() {
             scan_correspondence,
             create_correspondence_draft,
             attach_outgoing_letter,
+            file_outlook_outgoing,
+            file_outlook_incoming,
             rename_correspondence_folder,
             delete_correspondence_folder,
             choose_worklog_excel,

@@ -17,7 +17,7 @@
     <AppDomain>https://den1s1.github.io</AppDomain>
   </AppDomains>
   <Hosts><Host Name="Mailbox" /></Hosts>
-  <Requirements><Sets><Set Name="Mailbox" MinVersion="1.3" /></Sets></Requirements>
+  <Requirements><Sets><Set Name="Mailbox" MinVersion="1.8" /></Sets></Requirements>
   <FormSettings>
     <Form xsi:type="ItemRead"><DesktopSettings><SourceLocation DefaultValue="https://den1s1.github.io/MyPlanner/taskpane.html" /><RequestedHeight>250</RequestedHeight></DesktopSettings></Form>
   </FormSettings>
@@ -25,7 +25,7 @@
   <Rule xsi:type="RuleCollection" Mode="Or"><Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" /></Rule>
   <DisableEntityHighlighting>false</DisableEntityHighlighting>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
-    <Requirements><bt:Sets DefaultMinVersion="1.3"><bt:Set Name="Mailbox" /></bt:Sets></Requirements>
+    <Requirements><bt:Sets DefaultMinVersion="1.8"><bt:Set Name="Mailbox" /></bt:Sets></Requirements>
     <Hosts><Host xsi:type="MailHost"><DesktopFormFactor>
       <ExtensionPoint xsi:type="MessageReadCommandSurface"><OfficeTab id="TabDefault"><Group id="MyPlanner.Group">
         <Label resid="Group.Label" />

@@ -48,8 +48,16 @@ export interface CapturedEmail {
   recipients: string
   receivedAt: string
   excerpt: string
+  attachments: CapturedAttachment[]
   capturedAt: string
   processed: boolean
+}
+
+export interface CapturedAttachment {
+  id: string
+  name: string
+  path: string
+  size: number
 }
 
 export type TrackingStatus = 'waiting' | 'reminded' | 'completed' | 'cancelled'

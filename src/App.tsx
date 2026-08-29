@@ -6,7 +6,7 @@ import {
   ArrowUpRight, BellRing, BriefcaseBusiness, CalendarDays, Check, CheckCircle2,
   ChevronRight, Circle, Clock3, ExternalLink, FileText, FolderOpen,
   Eye, EyeOff, GripVertical, LayoutDashboard, Link2, ListTodo, Menu, MessageSquareText, MoreHorizontal,
-  Inbox, NotebookPen, PanelLeftClose, Pencil, Plus, Settings, StickyNote,
+  Inbox, NotebookPen, PanelLeftClose, Paperclip, Pencil, Plus, Settings, StickyNote,
   Trash2, X,
 } from 'lucide-react'
 import { initialData } from './data'
@@ -64,7 +64,8 @@ function loadData(): PlannerData {
       const legacy = stage as ContractStage & { payment?: string; advanceAmount?: number }
       return { ...stage, status: statusMigration[stage.status] || stage.status, suspensionLetter: stage.suspensionLetter || '', cost: Number(stage.cost) || 0, advancePercent: Number(stage.advancePercent ?? legacy.advanceAmount) || 0, advanceStatus: stage.advanceStatus || (legacy.payment === 'Оплачено' ? 'paid' : 'unpaid'), finalPaymentStatus: stage.finalPaymentStatus || 'unpaid' } as ContractStage
     })
-    return { ...initialData, ...parsed, projects, tasks, contractStages, meetings: parsed.meetings || [], inbox: parsed.inbox || [], trackings: parsed.trackings || [], integrations: { ...initialData.integrations, ...(parsed.integrations || {}) } }
+    const inbox = (parsed.inbox || []).map(email => ({ ...email, attachments: email.attachments || [] }))
+    return { ...initialData, ...parsed, projects, tasks, contractStages, meetings: parsed.meetings || [], inbox, trackings: parsed.trackings || [], integrations: { ...initialData.integrations, ...(parsed.integrations || {}) } }
   } catch { return initialData }
 }
 
@@ -104,7 +105,10 @@ function App() {
       await invoke('set_outlook_bridge_key', { key })
       unlisten = await listen<CapturedEmail>('outlook-email-captured', event => {
         setData(current => {
-          if (current.inbox.some(item => item.outlookItemId && item.outlookItemId === event.payload.outlookItemId)) return current
+          const duplicate = current.inbox.find(item => !item.processed && item.outlookItemId && item.outlookItemId === event.payload.outlookItemId)
+          if (duplicate) {
+            return { ...current, inbox: current.inbox.map(item => item.id === duplicate.id ? { ...event.payload, id: duplicate.id } : item) }
+          }
           return { ...current, inbox: [event.payload, ...current.inbox] }
         })
       })
@@ -202,7 +206,7 @@ function DataSettings({ data, importData, close }: { data: PlannerData; importDa
         tasks: parsed.tasks.map(task => ({ ...task, description: task.description || '', status: task.status || (task.done ? 'done' : 'planned'), assignee: task.assignee || '', source: task.source || 'manual', contractStageId: task.contractStageId || '', meetingId: task.meetingId || '' })) as Task[],
         contractStages: parsed.contractStages || [],
         meetings: parsed.meetings || [],
-        inbox: parsed.inbox || [],
+        inbox: (parsed.inbox || []).map(email => ({ ...email, attachments: email.attachments || [] })),
         trackings: parsed.trackings || [],
         integrations: { ...initialData.integrations, ...(parsed.integrations || {}) },
       }
@@ -218,6 +222,7 @@ function DataSettings({ data, importData, close }: { data: PlannerData; importDa
 function InboxView({ data, setData }: { data: PlannerData; setData: React.Dispatch<React.SetStateAction<PlannerData>> }) {
   const [projectByEmail, setProjectByEmail] = useState<Record<string, string>>({})
   const [showSetup, setShowSetup] = useState(false)
+  const [filingEmail, setFilingEmail] = useState<CapturedEmail | null>(null)
   const pending = data.inbox.filter(email => !email.processed)
   const emailText = (email: CapturedEmail) => [email.subject, `От: ${email.senderName || email.senderEmail}${email.senderEmail && email.senderName ? ` <${email.senderEmail}>` : ''}`, email.receivedAt ? `Дата: ${new Date(email.receivedAt).toLocaleString('ru-RU')}` : '', email.excerpt].filter(Boolean).join('\n\n')
   const finish = (email: CapturedEmail, kind: 'note' | 'task' | 'tracking') => {
@@ -238,6 +243,13 @@ function InboxView({ data, setData }: { data: PlannerData; setData: React.Dispat
     }))
   }
   const remove = (id: string) => setData(current => ({ ...current, inbox: current.inbox.filter(email => email.id !== id) }))
+  const openFiling = (email: CapturedEmail) => {
+    const project = data.projects.find(item => item.id === (projectByEmail[email.id] || ''))
+    if (!project) { window.alert('Сначала выберите проект.'); return }
+    if (!project.correspondencePath) { window.alert('У проекта не настроена папка переписки. Выберите её во вкладке «Переписка».'); return }
+    if (!(email.attachments || []).length) { window.alert('В этом письме нет переданных вложений. Передайте его из Outlook ещё раз после обновления надстройки.'); return }
+    setFilingEmail(email)
+  }
   const copyKey = async () => {
     await navigator.clipboard.writeText(data.integrations.outlookBridgeKey)
     window.alert('Код сопряжения скопирован.')
@@ -247,10 +259,58 @@ function InboxView({ data, setData }: { data: PlannerData; setData: React.Dispat
     {pending.length === 0 ? <div className="empty-inbox"><Inbox /><h2>Новых писем нет</h2><p>Откройте письмо в Outlook и нажмите «В MyPlanner».</p></div> : <div className="inbox-list">{pending.map(email => <article className="inbox-card" key={email.id}>
       <div className="inbox-card-head"><div><span>{email.senderName || email.senderEmail || 'Отправитель не указан'}</span><h2>{email.subject || 'Без темы'}</h2></div><time>{email.receivedAt ? new Date(email.receivedAt).toLocaleString('ru-RU') : ''}</time></div>
       {email.excerpt && <p>{email.excerpt}</p>}
-      <div className="inbox-actions"><select value={projectByEmail[email.id] || ''} onChange={event => setProjectByEmail(current => ({ ...current, [email.id]: event.target.value }))}><option value="">Без проекта</option>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="quiet-button" onClick={() => finish(email, 'note')}><NotebookPen /> В заметку</button><button className="quiet-button" onClick={() => finish(email, 'tracking')}><BellRing /> Отслеживать</button><button className="primary-button" onClick={() => finish(email, 'task')}><ListTodo /> В задачу</button><button className="icon-button" title="Удалить" onClick={() => remove(email.id)}><Trash2 /></button></div>
+      {(email.attachments || []).length > 0 && <div className="inbox-attachments"><Paperclip />{email.attachments.map(attachment => <span key={attachment.id}>{attachment.name}</span>)}</div>}
+      <div className="inbox-actions"><select value={projectByEmail[email.id] || ''} onChange={event => setProjectByEmail(current => ({ ...current, [email.id]: event.target.value }))}><option value="">Без проекта</option>{data.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button className="quiet-button" onClick={() => finish(email, 'note')}><NotebookPen /> В заметку</button><button className="quiet-button" onClick={() => finish(email, 'tracking')}><BellRing /> Отслеживать</button><button className="quiet-button" onClick={() => openFiling(email)}><MessageSquareText /> В переписку</button><button className="primary-button" onClick={() => finish(email, 'task')}><ListTodo /> В задачу</button><button className="icon-button" title="Удалить" onClick={() => remove(email.id)}><Trash2 /></button></div>
     </article>)}</div>}
     {showSetup && <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && setShowSetup(false)}><div className="modal outlook-setup"><div className="modal-head"><div><span>Интеграция</span><h2>Outlook Web Add-in</h2></div><button onClick={() => setShowSetup(false)}><X /></button></div><p className="settings-intro">Введите этот код один раз в надстройке Outlook. MyPlanner должен быть запущен во время передачи письма.</p><label>Код сопряжения<div className="pairing-row"><input readOnly value={data.integrations.outlookBridgeKey} /><button className="quiet-button" onClick={copyKey}>Копировать</button></div></label><small>Локальный приёмник: http://127.0.0.1:17832</small><div className="modal-actions"><button className="quiet-button" onClick={() => setShowSetup(false)}>Закрыть</button></div></div></div>}
+    {filingEmail && <OutlookCorrespondenceFiling email={filingEmail} project={data.projects.find(project => project.id === projectByEmail[filingEmail.id])!} close={() => setFilingEmail(null)} saved={() => { setData(current => ({ ...current, inbox: current.inbox.map(email => email.id === filingEmail.id ? { ...email, processed: true } : email) })); setFilingEmail(null) }} />}
   </>
+}
+
+function formatAttachmentSize(size: number) {
+  if (size < 1024) return `${size} Б`
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} КБ`
+  return `${(size / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`
+}
+
+function OutlookCorrespondenceFiling({ email, project, close, saved }: { email: CapturedEmail; project: Project; close: () => void; saved: () => void }) {
+  const [direction, setDirection] = useState<'incoming' | 'outgoing'>('incoming')
+  const [folders, setFolders] = useState<CorrespondenceFolderRecord[]>([])
+  const [targetFolder, setTargetFolder] = useState('')
+  const [selected, setSelected] = useState<string[]>(() => (email.attachments || []).map(attachment => attachment.path))
+  const [date, setDate] = useState(email.receivedAt ? email.receivedAt.slice(0, 10) : new Date().toISOString().slice(0, 10))
+  const [number, setNumber] = useState('')
+  const [correspondent, setCorrespondent] = useState(email.senderName || email.senderEmail || '')
+  const [subject, setSubject] = useState(email.subject || '')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    void invoke<CorrespondenceFolderRecord[]>('scan_correspondence', { path: project.correspondencePath })
+      .then(setFolders).catch(scanError => setError(String(scanError))).finally(() => setLoading(false))
+  }, [project.correspondencePath])
+  const outgoing = folders.map(parseCorrespondenceFolder).filter(folder => folder.direction === 'outgoing')
+  const toggleAttachment = (path: string) => setSelected(current => current.includes(path) ? current.filter(value => value !== path) : [...current, path])
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!selected.length) { setError('Выберите хотя бы одно вложение.'); return }
+    setSaving(true)
+    setError('')
+    try {
+      if (direction === 'outgoing') {
+        if (!targetFolder) { setError('Выберите папку исходящего письма.'); return }
+        await invoke('file_outlook_outgoing', { folderPath: targetFolder, attachmentPaths: selected })
+      } else {
+        await invoke('file_outlook_incoming', { root: project.correspondencePath, date, number, correspondent, subject, attachmentPaths: selected })
+      }
+      saved()
+    } catch (filingError) {
+      setError(String(filingError))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><form className="modal outlook-filing" onSubmit={submit}><div className="modal-head"><div><span>Официальная переписка</span><h2>Перенести вложения</h2></div><button type="button" onClick={close}><X /></button></div><div className="type-switch"><button type="button" className={direction === 'incoming' ? 'active' : ''} onClick={() => setDirection('incoming')}>Входящее</button><button type="button" className={direction === 'outgoing' ? 'active' : ''} onClick={() => setDirection('outgoing')}>Исходящее</button></div><div className="filing-attachments"><strong>Вложения письма</strong>{(email.attachments || []).map(attachment => <label key={attachment.id}><input type="checkbox" checked={selected.includes(attachment.path)} onChange={() => toggleAttachment(attachment.path)} /><Paperclip /><span>{attachment.name}<small>{formatAttachmentSize(attachment.size)}</small></span></label>)}</div>{direction === 'outgoing' ? <label className="filing-folder">Папка исходящего письма<select value={targetFolder} onChange={event => setTargetFolder(event.target.value)} disabled={loading}><option value="">{loading ? 'Загружаю папки…' : 'Выберите письмо'}</option>{outgoing.map(folder => <option key={folder.path} value={folder.path}>{folder.draft ? 'Заготовка · ' : ''}{folder.name}</option>)}</select></label> : <div className="correspondence-form filing-incoming"><label>Дата<input type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label>Номер письма<input value={number} onChange={event => setNumber(event.target.value)} placeholder="Например, исх. 622-12376" required /></label><label className="span-2">Корреспондент<input value={correspondent} onChange={event => setCorrespondent(event.target.value)} placeholder="Например, АА" required /></label><label className="span-2">Тема<input value={subject} onChange={event => setSubject(event.target.value)} required /></label></div>}{error && <div className="correspondence-error filing-error">{error}</div>}<div className="modal-actions"><button type="button" className="quiet-button" onClick={close}>Отмена</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Переношу…' : 'Перенести в переписку'}</button></div></form></div>
 }
 
 function PageIntro({ eyebrow, title, subtitle, action }: { eyebrow: string; title: string; subtitle?: string; action?: React.ReactNode }) {
